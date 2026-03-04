@@ -1,6 +1,8 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+# =============================================================================
+# RIPA – App mobile (Expo / React Native) – .gitignore pour le dépôt mobileapp
+# =============================================================================
 
-# dependencies
+# Dépendances
 node_modules/
 
 # Expo
@@ -9,7 +11,9 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native
+# Native (générés par EAS / prebuild, ne pas versionner en Expo managed)
+ios/
+android/
 .kotlin/
 *.orig.*
 *.jks
@@ -21,21 +25,49 @@ expo-env.d.ts
 # Metro
 .metro-health-check*
 
-# debug
+# Debug / logs
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Fichiers d'environnement (secrets, URLs de prod, etc.)
+.env
+.env.*
+.env*.local
+!.env.example
 
 # macOS
 .DS_Store
 *.pem
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# local env files
-.env*.local
+# Éditeurs / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 
-# typescript
+# TypeScript / build
 *.tsbuildinfo
+build/
+*.generated.*
 
-# generated native folders
-/ios
-/android
+# Tests / couverture
+coverage/
+.nyc_output/
+*.lcov
+
+# Temporaires
+tmp/
+temp/
+*.tmp
+.cache/
