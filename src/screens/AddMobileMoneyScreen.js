@@ -28,7 +28,7 @@ import * as storage from '../services/storage';
 const PHONE_PLACEHOLDER = '+243 9XX XXX XXX';
 const ICON_SIZE = 20;
 
-export function AddMobileMoneyScreen({ navigation }) {
+export function AddMobileMoneyScreen({ navigation, route }) {
   const { token, setError } = useApi();
   const [numCompte, setNumCompte] = useState('');
   const [pin, setPin] = useState('');
@@ -92,6 +92,7 @@ export function AddMobileMoneyScreen({ navigation }) {
         setNumCompte('');
         setPin('');
         await fetchAccounts();
+        // Si on venait du flux carte virtuelle, on reste sur l'écran succès avec option de continuer
       } else {
         setErrorMsg(res.message || 'Erreur lors de l\'enregistrement.');
       }
@@ -213,10 +214,17 @@ export function AddMobileMoneyScreen({ navigation }) {
                 </View>
                 <Text style={styles.successTitle}>Compte enregistré</Text>
                 <Text style={styles.cardSub}>Votre compte Mobile Money a bien été ajouté.</Text>
-                <TouchableOpacity style={styles.cta} onPress={onAddAnother} activeOpacity={0.85}>
-                  <Text style={styles.ctaText}>Ajouter un autre compte</Text>
-                  <FontAwesome5 name="plus" size={ICON_SIZE} color={colors.tertiary} style={styles.ctaIcon} />
-                </TouchableOpacity>
+                {route.params?.fromOrderVirtual && route.params?.brand ? (
+                  <TouchableOpacity style={styles.cta} onPress={() => navigation.replace('OrderVirtualCard', { fromOrderVirtual: true, brand: route.params.brand })} activeOpacity={0.85}>
+                    <Text style={styles.ctaText}>Continuer vers la carte virtuelle</Text>
+                    <FontAwesome5 name="credit-card" size={ICON_SIZE} color={colors.tertiary} style={styles.ctaIcon} />
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity style={styles.cta} onPress={onAddAnother} activeOpacity={0.85}>
+                    <Text style={styles.ctaText}>Ajouter un autre compte</Text>
+                    <FontAwesome5 name="plus" size={ICON_SIZE} color={colors.tertiary} style={styles.ctaIcon} />
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity style={styles.linkBtn} onPress={() => navigation.goBack()}>
                   <Text style={styles.linkBtnText}>Retour à l’accueil</Text>
                 </TouchableOpacity>

@@ -2,7 +2,7 @@
  * Client API RIPA – communication avec le backend (contrôleur Apiapp)
  * Base URL à adapter selon l'environnement (localhost, IP du Mac, ou URL de prod).
  */
-const API_BASE_URL = 'http://192.168.10.106/ripa/index.php/api/app';
+const API_BASE_URL = 'http://192.168.1.156/ripa/index.php/api/app';
 
 /**
  * Effectue une requête vers l'API RIPA.
@@ -78,6 +78,36 @@ export function addAccount(token, numCompte, pin) {
   return apiRequest('/accounts/add', { method: 'POST', body: { num_compte: numCompte, pin }, token });
 }
 
+/** Supprimer un compte mobile money — id, pin */
+export function deleteAccount(token, id, pin) {
+  return apiRequest('/accounts/delete', { method: 'POST', body: { id, pin }, token });
+}
+
+/** Mettre à jour un compte mobile money (ex: défaut) — id, is_default, pin */
+export function updateAccount(token, id, is_default, pin) {
+  return apiRequest('/accounts/update', { method: 'POST', body: { id, is_default, pin }, token });
+}
+
+/** Liste des comptes bancaires */
+export function getBankAccounts(token) {
+  return apiRequest('/accounts/bank', { method: 'GET', token });
+}
+
+/** Ajouter un compte bancaire — nom_banque, num_compte, pin */
+export function addBankAccount(token, nom_banque, num_compte, pin) {
+  return apiRequest('/accounts/bank/add', { method: 'POST', body: { nom_banque, num_compte, pin }, token });
+}
+
+/** Modifier un compte bancaire — id, nom_banque?, num_compte?, pin */
+export function updateBankAccount(token, id, data, pin) {
+  return apiRequest('/accounts/bank/update', { method: 'POST', body: { id, ...data, pin }, token });
+}
+
+/** Supprimer un compte bancaire — id, pin */
+export function deleteBankAccount(token, id, pin) {
+  return apiRequest('/accounts/bank/delete', { method: 'POST', body: { id, pin }, token });
+}
+
 /** Liste des cartes (token requis) */
 export function getCards(token) {
   return apiRequest('/cards', { method: 'GET', token });
@@ -88,6 +118,26 @@ export function registerCard(token, pan, expiry, cvv, pin) {
   return apiRequest('/cards/register', { method: 'POST', body: { pan, expiry, cvv, pin }, token });
 }
 
+/** Commander une carte virtuelle — brand: 'visa'|'mastercard', pin. KYC + Mobile Money requis. */
+export function orderVirtualCard(token, brand, pin) {
+  return apiRequest('/cards/order-virtual', { method: 'POST', body: { brand, pin }, token });
+}
+
+/** Supprimer une carte — id, pin */
+export function deleteCard(token, id, pin) {
+  return apiRequest('/cards/delete', { method: 'POST', body: { id, pin }, token });
+}
+
+/** Recharger la carte virtuelle depuis Mobile Money — card_id, account_id, amount, pin (simulation Onafriq) */
+export function cardRecharge(token, cardId, accountId, amount, pin) {
+  return apiRequest('/cards/recharge', { method: 'POST', body: { card_id: cardId, account_id: accountId, amount, pin }, token });
+}
+
+/** Retrait carte virtuelle vers Mobile Money — card_id, account_id, amount, pin (simulation Onafriq) */
+export function cardWithdraw(token, cardId, accountId, amount, pin) {
+  return apiRequest('/cards/withdraw', { method: 'POST', body: { card_id: cardId, account_id: accountId, amount, pin }, token });
+}
+
 /** Récupérer le statut KYC (token requis) */
 export function getKyc(token) {
   return apiRequest('/kyc', { method: 'GET', token });
@@ -96,4 +146,20 @@ export function getKyc(token) {
 /** Soumettre le KYC — nom, post_nom, prenom, date_naissance, adresse, photo_piece_identite, photo_utilisateur (base64) */
 export function submitKyc(token, data) {
   return apiRequest('/kyc/submit', { method: 'POST', body: data, token });
+}
+
+/** Liste des notifications (token requis). Option: unread_only=1 */
+export function getNotifications(token, unreadOnly = false) {
+  const q = unreadOnly ? '?unread_only=1' : '';
+  return apiRequest(`/notifications${q}`, { method: 'GET', token });
+}
+
+/** Marquer notifications comme lues — body: { ids: [1,2] } ou { all: true } */
+export function markNotificationsRead(token, body) {
+  return apiRequest('/notifications/read', { method: 'POST', body, token });
+}
+
+/** Transactions récentes (paiements, réceptions, transferts, recharge/décharge carte). limit optionnel (défaut 20). */
+export function getRecentTransactions(token, limit = 20) {
+  return apiRequest(`/transactions/recent?limit=${limit}`, { method: 'GET', token });
 }

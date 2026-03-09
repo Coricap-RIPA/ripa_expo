@@ -89,7 +89,7 @@ export function RegisterCardScreen({ navigation }) {
     } catch (e) {
       const msg = e.message || '';
       if (msg.includes('KYC') || msg.includes('403')) {
-        setErrorMsg('Vous devez compléter votre KYC avant d\'enregistrer une carte. Allez dans Paramètres → KYC.');
+        setErrorMsg("Complétez votre KYC avant d'enregistrer une carte. Menu Paramètres puis KYC.");
       } else {
         setErrorMsg(msg || 'Erreur réseau.');
       }
@@ -150,7 +150,7 @@ export function RegisterCardScreen({ navigation }) {
                 </View>
                 <View style={styles.row}>
                   <View style={[styles.fieldWrap, styles.half]}>
-                    <Text style={styles.label}>Date d’expiration (MM/YY)</Text>
+                    <Text style={styles.label}>MM/YY</Text>
                     <TextInput
                       style={styles.input}
                       placeholder="12/28"
@@ -243,7 +243,7 @@ const styles = StyleSheet.create({
   headerSpacer: { width: 36 },
   container: { flex: 1, backgroundColor: '#FAFAFC' },
   scroll: { flex: 1 },
-  scrollContent: { padding: 20, paddingBottom: 40 },
+  scrollContent: { padding: 20, paddingBottom: 60, flexGrow: 1 },
   cardVisual: {
     borderRadius: 20,
     overflow: 'hidden',
