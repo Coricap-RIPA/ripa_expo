@@ -19,9 +19,14 @@ import { HomeScreen } from '../screens/HomeScreen';
 import { AddMobileMoneyScreen } from '../screens/AddMobileMoneyScreen';
 import { OrderVirtualCardScreen } from '../screens/OrderVirtualCardScreen';
 import { RegisterCardScreen } from '../screens/RegisterCardScreen';
+import { CardDetailScreen } from '../screens/CardDetailScreen';
 import { KycScreen } from '../screens/KycScreen';
 import { KycFormScreen } from '../screens/KycFormScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import { NotificationsScreen } from '../screens/NotificationsScreen';
+import { MobileMoneyListScreen } from '../screens/MobileMoneyListScreen';
+import { BankAccountsListScreen } from '../screens/BankAccountsListScreen';
+import { AddBankAccountScreen } from '../screens/AddBankAccountScreen';
 import { colors } from '../constants/theme';
 
 const Stack = createNativeStackNavigator();
@@ -63,9 +68,14 @@ export function RootNavigator() {
             <Stack.Screen name="AddMobileMoney" component={AddMobileMoneyScreen} />
             <Stack.Screen name="OrderVirtualCard" component={OrderVirtualCardScreen} />
             <Stack.Screen name="RegisterCard" component={RegisterCardScreen} />
+            <Stack.Screen name="CardDetail" component={CardDetailScreen} />
             <Stack.Screen name="Kyc" component={KycScreen} />
             <Stack.Screen name="KycForm" component={KycFormScreen} />
             <Stack.Screen name="Settings" component={SettingsScreen} />
+            <Stack.Screen name="Notifications" component={NotificationsScreen} />
+            <Stack.Screen name="MobileMoneyList" component={MobileMoneyListScreen} />
+            <Stack.Screen name="BankAccountsList" component={BankAccountsListScreen} />
+            <Stack.Screen name="AddBankAccount" component={AddBankAccountScreen} />
           </>
         ) : (
           <>

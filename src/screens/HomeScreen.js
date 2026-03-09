@@ -3,7 +3,7 @@
  * Design fintech : header avec logo, carte active ou placeholder (+),
  * moyens de paiement, ergonomie et hiérarchie claire.
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
@@ -26,27 +26,29 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { colors } from '../constants/theme';
 import { logos } from '../constants/assets';
 import { useApi } from '../context/ApiContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from '../services/api';
+import { showSystemNotification } from '../services/notificationsSystem';
 
-const CARD_PLACEHOLDER_HEIGHT = 160;
-const STRIP_WIDTH_PERCENT = '15%';
-/** Couleur claire (plus claire que la secondaire) pour la première bande */
-const STRIP_LIGHT_COLOR = '#E8E4F8';
+const BALANCE_VISIBLE_STORAGE_KEY = 'ripa_balance_visible';
 
 /**
- * RÈGLE MÉTIER moyens de paiement (à respecter dans AddMobileMoney, OrderVirtualCard, RegisterCard + backend) :
+ * RÈGLE MÉTIER moyens de paiement (à respecter dans AddMobileMoney, Accounts, OrderVirtualCard, RegisterCard + backend) :
  * - Mobile Money : un ou plusieurs comptes autorisés.
+ * - Compte bancaire : un ou plusieurs comptes autorisés.
  * - Carte virtuelle : une seule autorisée.
  * - Carte bancaire (physique) : une seule autorisée.
  */
 const PAYMENT_ADD_OPTIONS = [
-  { type: 'mobile_money', label: 'Mobile Money', sub: 'Airtel, Orange, M-Pesa…', icon: 'mobile-alt', iconBg: '#E8E0FF', screen: 'AddMobileMoney' },
+  { type: 'mobile_money', label: 'Mobile Money', sub: 'Airtel, Orange, M-Pesa…', icon: 'mobile-alt', iconBg: '#E8E0FF', screen: 'MobileMoneyList' },
+  { type: 'bank_account', label: 'Compte bancaire', sub: 'Banques, IBAN…', icon: 'university', iconBg: '#E8E4F8', screen: 'BankAccountsList' },
   { type: 'virtual_card', label: 'Carte virtuelle', sub: 'Visa / Mastercard', icon: 'credit-card', iconBg: '#F0EDFF', screen: 'OrderVirtualCard' },
   { type: 'physical_card', label: 'Carte bancaire', sub: 'Lier une carte', icon: 'wallet', iconBg: '#E8E0FF', screen: 'RegisterCard' },
 ];
 
 const MENU_OPTIONS = [
   { key: 'profile', label: 'Mon profil', icon: 'user', screen: null },
+  { key: 'notifications', label: 'Notifications', icon: 'bell', screen: 'Notifications' },
   { key: 'help', label: 'Aide', icon: 'question-circle', screen: null },
   { key: 'settings', label: 'Paramètres', icon: 'cog', screen: 'Settings' },
   { key: 'kyc', label: 'KYC', icon: 'id-card', screen: 'Kyc' },
@@ -57,44 +59,86 @@ const MENU_OPTIONS = [
 export function HomeScreen({ navigation }) {
   const { logout, token } = useApi();
   const [menuVisible, setMenuVisible] = useState(false);
-  const [activeCard] = useState(null);
-  const [recentTransactions] = useState([]);
+  const [recentTransactions, setRecentTransactions] = useState([]);
   const [recentContacts] = useState([]);
   const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(false);
-  /** Moyens enregistrés : { id, type: 'mobile_money'|'virtual_card'|'physical_card', label?, sub? } — règle : 1+ mobile, 1 virtuelle, 1 physique */
-  const [paymentMethods, setPaymentMethods] = useState([]);
+  /** Cartes uniquement pour la bande moyens de paiement : { id, type, label, sub, last4, brand } */
+  const [cards, setCards] = useState([]);
+  /** Nombre de comptes Mobile Money (pour l'indicateur sur la tuile Mobile Money) */
+  const [mobileMoneyCount, setMobileMoneyCount] = useState(0);
+  /** Nombre de comptes bancaires (pour l'indicateur sur la tuile Compte bancaire) */
+  const [bankAccountCount, setBankAccountCount] = useState(0);
+  /** Nombre de notifications non lues (badge menu + barre) */
+  const [notificationCount, setNotificationCount] = useState(0);
+  /** Statut KYC pour affichage CTA (rejete → message + refaire) */
+  const [kycStatus, setKycStatus] = useState(null);
+  /** Dernier nombre de notifications pour lequel on a affiché une notif système (éviter spam) */
+  const lastNotifiedCountRef = useRef(0);
+  /** Afficher ou masquer le solde sur la carte virtuelle (persisté) */
+  const [balanceVisible, setBalanceVisible] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(BALANCE_VISIBLE_STORAGE_KEY).then((v) => {
+      if (!cancelled && v !== null) setBalanceVisible(v === '1');
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const toggleBalanceVisible = useCallback((e) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    setBalanceVisible((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(BALANCE_VISIBLE_STORAGE_KEY, next ? '1' : '0').catch(() => {});
+      return next;
+    });
+  }, []);
 
   const loadPaymentMethods = useCallback(async () => {
     if (!token) return;
     setLoadingPaymentMethods(true);
     try {
-      const [accountsRes, cardsRes] = await Promise.all([
+      const [accountsRes, bankRes, cardsRes, notifRes, kycRes, txRes] = await Promise.all([
         api.getAccounts(token),
+        api.getBankAccounts(token),
         api.getCards(token),
+        api.getNotifications(token, true),
+        api.getKyc(token),
+        api.getRecentTransactions(token, 20).catch(() => ({ data: { transactions: [] } })),
       ]);
-      const list = [];
       const accounts = accountsRes?.data?.accounts ?? [];
-      accounts.forEach((acc) => {
-        list.push({
-          id: String(acc.id),
-          type: 'mobile_money',
-          label: acc.number_masked || 'Mobile Money',
-          sub: 'Mobile Money',
-        });
-      });
-      const cards = cardsRes?.data?.cards ?? [];
-      cards.forEach((c) => {
-        const isVirtual = (c.type || '').toLowerCase() === 'virtual';
-        list.push({
+      setMobileMoneyCount(accounts.length);
+      const bankAccounts = bankRes?.data?.accounts ?? [];
+      setBankAccountCount(bankAccounts.length);
+      const unreadCount = notifRes?.success && notifRes?.data?.count_unread != null ? notifRes.data.count_unread : 0;
+      setNotificationCount(unreadCount);
+      if (unreadCount > 0 && unreadCount > lastNotifiedCountRef.current) {
+        lastNotifiedCountRef.current = unreadCount;
+        const title = 'RIPA';
+        const body = unreadCount === 1 ? '1 nouvelle notification' : `${unreadCount} nouvelles notifications`;
+        showSystemNotification(title, body, unreadCount).catch(() => {});
+      }
+      if (kycRes?.success && kycRes?.data?.statut) setKycStatus(kycRes.data.statut);
+      const cardsList = (cardsRes?.data?.cards ?? []).map((c) => {
+        const isVirtual = (c.type || '').toLowerCase() === 'virtuelle' || (c.type || '').toLowerCase() === 'virtual';
+        return {
           id: String(c.id),
           type: isVirtual ? 'virtual_card' : 'physical_card',
           label: `•••• ${c.last4 || '****'}`,
           sub: c.brand || 'Carte',
-        });
+          last4: c.last4,
+          brand: c.brand,
+          balance: c.balance != null ? Number(c.balance) : null,
+          expiry: c.expiry,
+        };
       });
-      setPaymentMethods(list);
+      setCards(cardsList);
+      const txList = txRes?.data?.transactions ?? [];
+      setRecentTransactions(Array.isArray(txList) ? txList : []);
     } catch (_) {
-      setPaymentMethods([]);
+      setCards([]);
+      setMobileMoneyCount(0);
+      setRecentTransactions([]);
     } finally {
       setLoadingPaymentMethods(false);
     }
@@ -106,26 +150,42 @@ export function HomeScreen({ navigation }) {
     }, [loadPaymentMethods])
   );
 
-  const hasVirtualCard = paymentMethods.some((p) => p.type === 'virtual_card');
-  const hasPhysicalCard = paymentMethods.some((p) => p.type === 'physical_card');
-  const mobileMoneyCount = paymentMethods.filter((p) => p.type === 'mobile_money').length;
+  const hasVirtualCard = cards.some((c) => c.type === 'virtual_card');
+  const hasPhysicalCard = cards.some((c) => c.type === 'physical_card');
   const addOptionsToShow = [
     PAYMENT_ADD_OPTIONS.find((o) => o.type === 'mobile_money'),
+    PAYMENT_ADD_OPTIONS.find((o) => o.type === 'bank_account'),
     ...(hasVirtualCard ? [] : [PAYMENT_ADD_OPTIONS.find((o) => o.type === 'virtual_card')]),
     ...(hasPhysicalCard ? [] : [PAYMENT_ADD_OPTIONS.find((o) => o.type === 'physical_card')]),
   ].filter(Boolean);
-  const isEmpty = paymentMethods.length === 0;
+  const virtualCard = cards.find((c) => c.type === 'virtual_card') || null;
+  const physicalCard = cards.find((c) => c.type === 'physical_card') || null;
+  const primaryCard = virtualCard || physicalCard || null;
+  const canAddCard = !hasVirtualCard || !hasPhysicalCard;
+  const isEmpty = cards.length === 0 && addOptionsToShow.length <= 1;
 
   const renderAddCardIndicator = (opt) => {
-    if (opt.type !== 'mobile_money' || mobileMoneyCount === 0) return null;
-    return (
-      <View style={styles.pmCardAddIndicator}>
-        <FontAwesome5 name="check-circle" size={12} color={colors.secondary} style={styles.pmCardAddIndicatorIcon} />
-        <Text style={styles.pmCardAddIndicatorText}>
-          {mobileMoneyCount === 1 ? '1 compte enregistré' : `${mobileMoneyCount} comptes enregistrés`}
-        </Text>
-      </View>
-    );
+    if (opt.type === 'mobile_money' && mobileMoneyCount > 0) {
+      return (
+        <View style={styles.pmCardAddIndicator}>
+          <FontAwesome5 name="check-circle" size={12} color={colors.secondary} style={styles.pmCardAddIndicatorIcon} />
+          <Text style={styles.pmCardAddIndicatorText}>
+            {mobileMoneyCount === 1 ? '1 compte enregistré' : `${mobileMoneyCount} comptes enregistrés`}
+          </Text>
+        </View>
+      );
+    }
+    if (opt.type === 'bank_account' && bankAccountCount > 0) {
+      return (
+        <View style={styles.pmCardAddIndicator}>
+          <FontAwesome5 name="check-circle" size={12} color={colors.secondary} style={styles.pmCardAddIndicatorIcon} />
+          <Text style={styles.pmCardAddIndicatorText}>
+            {bankAccountCount === 1 ? '1 compte enregistré' : `${bankAccountCount} comptes enregistrés`}
+          </Text>
+        </View>
+      );
+    }
+    return null;
   };
 
   const onExitApp = () => {
@@ -211,8 +271,21 @@ export function HomeScreen({ navigation }) {
               />
               <View style={styles.headerSpacer} />
               <TouchableOpacity
+                onPress={() => navigation.navigate('Notifications')}
+                style={styles.headerIconBtn}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                activeOpacity={0.8}
+              >
+                <FontAwesome5 name="bell" size={18} color="rgba(255,255,255,0.92)" />
+                {notificationCount > 0 ? (
+                  <View style={styles.notifBadge}>
+                    <Text style={styles.notifBadgeText}>{notificationCount > 99 ? '99+' : notificationCount}</Text>
+                  </View>
+                ) : null}
+              </TouchableOpacity>
+              <TouchableOpacity
                 onPress={() => setMenuVisible(true)}
-                style={styles.menuBtn}
+                style={styles.headerIconBtn}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 activeOpacity={0.8}
               >
@@ -220,6 +293,17 @@ export function HomeScreen({ navigation }) {
               </TouchableOpacity>
             </View>
           </LinearGradient>
+
+          {/* Barre de notification : clic ouvre l'écran Notifications */}
+          {notificationCount > 0 ? (
+            <TouchableOpacity style={styles.notifBar} onPress={() => navigation.navigate('Notifications')} activeOpacity={0.9}>
+              <FontAwesome5 name="bell" size={16} color={colors.tertiary} style={styles.notifBarIcon} />
+              <Text style={styles.notifBarText}>
+                {notificationCount === 1 ? '1 nouvelle notification' : `${notificationCount} nouvelles notifications`}
+              </Text>
+              <FontAwesome5 name="chevron-right" size={14} color="rgba(255,255,255,0.8)" />
+            </TouchableOpacity>
+          ) : null}
 
           <Modal visible={menuVisible} transparent animationType="fade">
             <Pressable style={styles.menuOverlay} onPress={() => setMenuVisible(false)}>
@@ -239,44 +323,69 @@ export function HomeScreen({ navigation }) {
             </Pressable>
           </Modal>
 
-          {/* Carte active ou placeholder */}
-          <View style={styles.cardSection}>
-            {activeCard ? (
-              <View style={styles.bankCard}>
-                <View style={styles.bankCardTop}>
-                  <View style={styles.chip} />
-                  <Text style={styles.bankCardBrand}>{activeCard.brand || 'VISA'}</Text>
-                </View>
-                <Text style={styles.bankCardPan}>•••• •••• •••• {activeCard.last4}</Text>
-                <View style={styles.bankCardBottom}>
-                  <View>
-                    <Text style={styles.bankCardLabel}>Expiration</Text>
-                    <Text style={styles.bankCardValue}>{activeCard.expiry || '••/••'}</Text>
-                  </View>
-                  <View style={styles.bankCardCvv}>
-                    <Text style={styles.bankCardLabel}>CVV</Text>
-                    <Text style={styles.bankCardValue}>•••</Text>
-                  </View>
-                </View>
-              </View>
-            ) : (
-              <TouchableOpacity style={styles.placeholderCard} onPress={onAddCardPress} activeOpacity={0.85}>
-                <View style={[styles.placeholderCardStrip, styles.placeholderCardStripLight]} />
-                <View style={[styles.placeholderCardStrip, styles.placeholderCardStripSecondary]} />
-                <LinearGradient
-                  colors={['#3d2c5c', '#2a1845']}
-                  style={styles.placeholderCardGradient}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
+          {/* Tableau de bord — Carte principale + Ajouter une carte (design 2026) */}
+          <View style={styles.dashboardSection}>
+            <Text style={styles.dashboardSectionTitle}>Tableau de bord</Text>
+            <View style={styles.dashboardCardRow}>
+              {primaryCard ? (
+                <TouchableOpacity
+                  style={styles.dashboardMainCard}
+                  onPress={() => navigation.navigate('CardDetail', { cardId: primaryCard.id, last4: primaryCard.last4, brand: primaryCard.brand, type: primaryCard.type })}
+                  activeOpacity={0.9}
                 >
-                  <View style={styles.placeholderPlusWrap}>
-                    <FontAwesome5 name="plus" size={32} color="rgba(255,255,255,0.9)" />
+                  <LinearGradient
+                    colors={['#2d1b4e', '#1a0d2e']}
+                    style={styles.dashboardMainCardGradient}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                  >
+                    <View style={styles.dashboardMainCardTop}>
+                      <Text style={styles.dashboardMainCardLabel}>
+                        {primaryCard.type === 'virtual_card' ? 'Solde disponible' : 'Ma carte'}
+                      </Text>
+                      <View style={styles.dashboardMainCardTopRight}>
+                        {primaryCard.type === 'virtual_card' && primaryCard.balance != null ? (
+                          <TouchableOpacity
+                            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                            onPress={toggleBalanceVisible}
+                            style={styles.balanceToggleBtn}
+                          >
+                            <FontAwesome5 name={balanceVisible ? 'eye-slash' : 'eye'} size={16} color="rgba(255,255,255,0.85)" />
+                          </TouchableOpacity>
+                        ) : (
+                          <FontAwesome5 name={primaryCard.type === 'virtual_card' ? 'credit-card' : 'wallet'} size={18} color="rgba(255,255,255,0.7)" />
+                        )}
+                      </View>
+                    </View>
+                    {primaryCard.type === 'virtual_card' && primaryCard.balance != null && balanceVisible ? (
+                      <Text style={styles.dashboardBalance}>{Number(primaryCard.balance).toFixed(2)} $</Text>
+                    ) : primaryCard.type === 'virtual_card' && primaryCard.balance != null && !balanceVisible ? (
+                      <Text style={styles.dashboardBalanceMasked}>•••• •• $</Text>
+                    ) : null}
+                    <Text style={styles.dashboardPan}>•••• {primaryCard.last4 || '****'}</Text>
+                    <View style={styles.dashboardMainCardBottom}>
+                      <Text style={styles.dashboardBrand}>{primaryCard.brand || 'Carte'}</Text>
+                      <FontAwesome5 name="chevron-right" size={14} color="rgba(255,255,255,0.8)" />
+                    </View>
+                  </LinearGradient>
+                </TouchableOpacity>
+              ) : null}
+              {canAddCard ? (
+                <TouchableOpacity
+                  style={[styles.dashboardAddCard, !primaryCard && styles.dashboardAddCardFull]}
+                  onPress={onAddCardPress}
+                  activeOpacity={0.9}
+                >
+                  <View style={styles.dashboardAddCardInner}>
+                    <View style={styles.dashboardAddCardIconWrap}>
+                      <FontAwesome5 name="plus" size={28} color={colors.primary} />
+                    </View>
+                    <Text style={styles.dashboardAddCardTitle}>Ajouter une carte</Text>
+                    <Text style={styles.dashboardAddCardSub}>Virtuelle ou bancaire</Text>
                   </View>
-                  <Text style={styles.placeholderCardText}>Ajouter une carte</Text>
-                  <Text style={styles.placeholderCardSub}>Virtuelle ou bancaire</Text>
-                </LinearGradient>
-              </TouchableOpacity>
-            )}
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </View>
 
           {/* Moyens de paiement (au-dessus de Récentes transactions) — défilement horizontal */}
@@ -286,7 +395,7 @@ export function HomeScreen({ navigation }) {
               <View>
                 <Text style={styles.paymentSectionTitle}>Moyens de paiement</Text>
                 <Text style={styles.paymentSectionSubtitle}>
-                  {isEmpty ? 'Ajoutez un moyen pour payer et recevoir' : 'Vos moyens enregistrés'}
+                  {cards.length === 0 ? 'Ajoutez un moyen pour payer et recevoir' : 'Vos moyens enregistrés'}
                 </Text>
               </View>
             </View>
@@ -295,60 +404,75 @@ export function HomeScreen({ navigation }) {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.paymentScrollContent}
             >
-              {isEmpty ? (
-                PAYMENT_ADD_OPTIONS.map((opt) => (
-                  <TouchableOpacity
-                    key={opt.type}
-                    style={styles.pmCardAdd}
-                    onPress={() => navigation.navigate(opt.screen)}
-                    activeOpacity={0.85}
-                  >
-                    <View style={[styles.pmCardIconWrap, { backgroundColor: opt.iconBg }]}>
-                      <FontAwesome5 name={opt.icon} size={24} color={colors.primary} />
-                    </View>
-                    <Text style={styles.pmCardLabel}>{opt.label}</Text>
-                    <Text style={styles.pmCardSub}>{opt.sub}</Text>
-                    {renderAddCardIndicator(opt)}
-                    <View style={styles.pmCardAddBadge}>
-                      <FontAwesome5 name="plus" size={12} color={colors.tertiary} />
-                    </View>
-                  </TouchableOpacity>
-                ))
-              ) : (
-                <>
-                  {paymentMethods.map((pm) => (
-                    <View key={pm.id} style={styles.pmCardRegistered}>
-                      <View style={[styles.pmCardIconWrap, { backgroundColor: '#E8E0FF' }]}>
-                        <FontAwesome5
-                          name={pm.type === 'mobile_money' ? 'mobile-alt' : pm.type === 'virtual_card' ? 'credit-card' : 'wallet'}
-                          size={22}
-                          color={colors.primary}
-                        />
-                      </View>
-                      <Text style={styles.pmCardLabel} numberOfLines={1}>{pm.label || (pm.type === 'mobile_money' ? 'Mobile Money' : pm.type === 'virtual_card' ? 'Carte virtuelle' : 'Carte bancaire')}</Text>
-                      {pm.sub ? <Text style={styles.pmCardSub} numberOfLines={1}>{pm.sub}</Text> : null}
-                    </View>
-                  ))}
-                  {addOptionsToShow.map((opt) => (
-                    <TouchableOpacity
-                      key={`add-${opt.type}`}
-                      style={styles.pmCardAdd}
-                      onPress={() => navigation.navigate(opt.screen)}
-                      activeOpacity={0.85}
-                    >
-                      <View style={[styles.pmCardIconWrap, { backgroundColor: opt.iconBg }]}>
-                        <FontAwesome5 name={opt.icon} size={24} color={colors.primary} />
-                      </View>
-                      <Text style={styles.pmCardLabel}>{opt.label}</Text>
-                      <Text style={styles.pmCardSub}>{opt.sub}</Text>
-                      {renderAddCardIndicator(opt)}
-                      <View style={styles.pmCardAddBadge}>
-                        <FontAwesome5 name="plus" size={12} color={colors.tertiary} />
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </>
-              )}
+              {/* Tuile Mobile Money : liste + ajout (comme avant) */}
+              <TouchableOpacity
+                style={styles.pmCardAdd}
+                onPress={() => navigation.navigate('MobileMoneyList')}
+                activeOpacity={0.85}
+              >
+                <View style={[styles.pmCardIconWrap, { backgroundColor: PAYMENT_ADD_OPTIONS[0].iconBg }]}>
+                  <FontAwesome5 name="mobile-alt" size={24} color={colors.primary} />
+                </View>
+                <Text style={styles.pmCardLabel}>Mobile Money</Text>
+                <Text style={styles.pmCardSub}>Airtel, Orange, M-Pesa…</Text>
+                {renderAddCardIndicator(PAYMENT_ADD_OPTIONS[0])}
+                <View style={styles.pmCardAddBadge}>
+                  <FontAwesome5 name="plus" size={12} color={colors.tertiary} />
+                </View>
+              </TouchableOpacity>
+
+              {/* Tuile Compte bancaire : liste + ajout (Accounts) */}
+              <TouchableOpacity
+                style={styles.pmCardAdd}
+                onPress={() => navigation.navigate('BankAccountsList')}
+                activeOpacity={0.85}
+              >
+                <View style={[styles.pmCardIconWrap, { backgroundColor: PAYMENT_ADD_OPTIONS[1].iconBg }]}>
+                  <FontAwesome5 name="university" size={24} color={colors.primary} />
+                </View>
+                <Text style={styles.pmCardLabel}>Compte bancaire</Text>
+                <Text style={styles.pmCardSub}>Banques, IBAN…</Text>
+                {renderAddCardIndicator(PAYMENT_ADD_OPTIONS[1])}
+                <View style={styles.pmCardAddBadge}>
+                  <FontAwesome5 name="plus" size={12} color={colors.tertiary} />
+                </View>
+              </TouchableOpacity>
+
+              {/* Cartes enregistrées : détail au clic (PCI DSS) */}
+              {cards.map((card) => (
+                <TouchableOpacity
+                  key={card.id}
+                  style={styles.pmCardRegistered}
+                  onPress={() => navigation.navigate('CardDetail', { cardId: card.id, last4: card.last4, brand: card.brand, type: card.type })}
+                  activeOpacity={0.85}
+                >
+                  <View style={[styles.pmCardIconWrap, { backgroundColor: '#E8E0FF' }]}>
+                    <FontAwesome5 name={card.type === 'virtual_card' ? 'credit-card' : 'wallet'} size={22} color={colors.primary} />
+                  </View>
+                  <Text style={styles.pmCardLabel} numberOfLines={1}>{card.label}</Text>
+                  {card.sub ? <Text style={styles.pmCardSub} numberOfLines={1}>{card.sub}</Text> : null}
+                  <FontAwesome5 name="chevron-right" size={12} color="#B0B0B0" style={styles.pmCardChevron} />
+                </TouchableOpacity>
+              ))}
+
+              {/* Ajouter carte virtuelle ou physique si pas déjà enregistrée */}
+              {addOptionsToShow.filter((o) => o.type !== 'mobile_money' && o.type !== 'bank_account').map((opt) => (
+                <TouchableOpacity
+                  key={`add-${opt.type}`}
+                  style={styles.pmCardAdd}
+                  onPress={() => navigation.navigate(opt.screen)}
+                  activeOpacity={0.85}
+                >
+                  <View style={[styles.pmCardIconWrap, { backgroundColor: opt.iconBg }]}>
+                    <FontAwesome5 name={opt.icon} size={24} color={colors.primary} />
+                  </View>
+                  <Text style={styles.pmCardLabel}>{opt.label}</Text>
+                  <Text style={styles.pmCardSub}>{opt.sub}</Text>
+                  <View style={styles.pmCardAddBadge}>
+                    <FontAwesome5 name="plus" size={12} color={colors.tertiary} />
+                  </View>
+                </TouchableOpacity>
+              ))}
             </ScrollView>
           </View>
 
@@ -390,40 +514,44 @@ export function HomeScreen({ navigation }) {
                   <FontAwesome5 name="receipt" size={32} color={colors.secondary} />
                 </View>
                 <Text style={styles.transactionsEmptyTitle}>Aucune transaction</Text>
-                <Text style={styles.transactionsEmptySub}>Vos opérations récentes apparaîtront ici</Text>
+                <Text style={styles.transactionsEmptySub}>Paiements, réceptions, transferts, recharge et décharge carte apparaîtront ici</Text>
               </View>
             ) : (
               <View style={styles.transactionsList}>
-                {recentTransactions.slice(0, 10).map((tx, index) => (
-                  <View key={tx.id || index} style={styles.transactionRow}>
-                    <View style={[styles.transactionIconWrap, { backgroundColor: tx.type === 'credit' ? '#E8F5E9' : '#FFEBEE' }]}>
-                      <FontAwesome5 name={tx.type === 'credit' ? 'arrow-down' : 'arrow-up'} size={14} color={tx.type === 'credit' ? '#2E7D32' : '#c62828'} />
+                {recentTransactions.slice(0, 15).map((tx, index) => {
+                  const isCredit = tx.is_credit === true;
+                  const iconName = tx.type === 'recharge' ? 'credit-card' : tx.type === 'retrait' ? 'wallet' : tx.type === 'payment' ? 'hand-holding-usd' : tx.type === 'reception' ? 'arrow-down' : tx.type === 'transfer' ? 'exchange-alt' : isCredit ? 'arrow-down' : 'arrow-up';
+                  return (
+                    <View key={tx.id || `tx-${index}`} style={styles.transactionRow}>
+                      <View style={[styles.transactionIconWrap, { backgroundColor: isCredit ? '#E8F5E9' : '#FFEBEE' }]}>
+                        <FontAwesome5 name={iconName} size={14} color={isCredit ? '#2E7D32' : '#c62828'} />
+                      </View>
+                      <View style={styles.transactionBody}>
+                        <Text style={styles.transactionLabel}>{tx.label || 'Transaction'}</Text>
+                        <Text style={styles.transactionDate}>{tx.date || ''}</Text>
+                      </View>
+                      <Text style={[styles.transactionAmount, isCredit ? styles.transactionAmountCredit : styles.transactionAmountDebit]}>
+                        {isCredit ? '+' : '-'}{typeof tx.amount === 'number' ? tx.amount.toFixed(2) : tx.amount || '0'} $
+                      </Text>
                     </View>
-                    <View style={styles.transactionBody}>
-                      <Text style={styles.transactionLabel}>{tx.label || 'Transaction'}</Text>
-                      <Text style={styles.transactionDate}>{tx.date || ''}</Text>
-                    </View>
-                    <Text style={[styles.transactionAmount, tx.type === 'credit' ? styles.transactionAmountCredit : styles.transactionAmountDebit]}>
-                      {tx.type === 'credit' ? '+' : '-'}{tx.amount || '0'} $
-                    </Text>
-                  </View>
-                ))}
+                  );
+                })}
               </View>
             )}
           </View>
 
           {/* Section KYC */}
-          <TouchableOpacity style={styles.kycSection} onPress={() => navigation.navigate('Kyc')} activeOpacity={0.85}>
+          <TouchableOpacity style={[styles.kycSection, kycStatus === 'rejete' && styles.kycSectionRejected]} onPress={() => navigation.navigate('Kyc')} activeOpacity={0.85}>
             <View style={styles.kycSectionLeft}>
-              <View style={styles.kycSectionIconWrap}>
-                <FontAwesome5 name="id-card" size={22} color={colors.primary} />
+              <View style={[styles.kycSectionIconWrap, kycStatus === 'rejete' && styles.kycSectionIconWrapRejected]}>
+                <FontAwesome5 name="id-card" size={22} color={kycStatus === 'rejete' ? '#c62828' : colors.primary} />
               </View>
-              <View>
-                <Text style={styles.kycSectionTitle}>Vérification d’identité (KYC)</Text>
-                <Text style={styles.kycSectionSub}>Statut et prochaine échéance</Text>
+              <View style={styles.kycSectionTextWrap}>
+                <Text style={styles.kycSectionTitle} numberOfLines={1}>Vérification d’identité (KYC)</Text>
+                <Text style={styles.kycSectionSub} numberOfLines={2}>{kycStatus === 'rejete' ? 'Dossier rejeté — Refaire le KYC et resoumettre' : 'Statut et prochaine échéance'}</Text>
               </View>
             </View>
-            <FontAwesome5 name="chevron-right" size={16} color="#B0B0B0" />
+            <FontAwesome5 name="chevron-right" size={16} color="#B0B0B0" style={styles.kycSectionChevron} />
           </TouchableOpacity>
 
           <View style={styles.footer}>
@@ -481,14 +609,39 @@ const styles = StyleSheet.create({
     width: 110,
   },
   headerSpacer: { flex: 1 },
-  menuBtn: {
+  headerIconBtn: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
+    marginLeft: 6,
   },
+  notifBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#c62828',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  notifBadgeText: { color: colors.tertiary, fontSize: 10, fontWeight: 'bold' },
+  notifBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(198,40,40,0.9)',
+    marginHorizontal: 14,
+    marginTop: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+  },
+  notifBarIcon: { marginRight: 10 },
+  notifBarText: { color: colors.tertiary, fontSize: 14, fontWeight: '600', flex: 1 },
   menuOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',
@@ -519,82 +672,126 @@ const styles = StyleSheet.create({
   menuItemIcon: { marginRight: 14 },
   menuItemText: { color: colors.fourth, fontSize: 16, fontWeight: '600' },
   menuItemLast: { borderBottomWidth: 0 },
-  cardSection: {
+  dashboardSection: {
     marginHorizontal: 14,
-    marginTop: 16,
-    marginBottom: 2,
+    marginTop: 20,
+    marginBottom: 4,
   },
-  bankCard: {
-    borderRadius: 20,
-    padding: 22,
-    minHeight: 160,
-    justifyContent: 'space-between',
-    backgroundColor: colors.primary,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 6,
+  dashboardSectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#8E8E8E',
+    letterSpacing: 0.5,
+    marginBottom: 12,
+    textTransform: 'uppercase',
   },
-  bankCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  chip: {
-    width: 40,
-    height: 32,
-    borderRadius: 6,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-  },
-  bankCardBrand: { color: colors.tertiary, fontSize: 18, fontWeight: 'bold', letterSpacing: 1 },
-  bankCardPan: { color: colors.tertiary, fontSize: 20, letterSpacing: 3 },
-  bankCardBottom: { flexDirection: 'row', alignItems: 'flex-end', gap: 24 },
-  bankCardLabel: { color: 'rgba(255,255,255,0.7)', fontSize: 11, marginBottom: 2 },
-  bankCardValue: { color: colors.tertiary, fontSize: 14, fontWeight: '600' },
-  bankCardCvv: {},
-  placeholderCard: {
+  dashboardCardRow: {
     flexDirection: 'row',
-    minHeight: CARD_PLACEHOLDER_HEIGHT,
-    borderRadius: 20,
+    gap: 12,
+    alignItems: 'stretch',
+  },
+  dashboardMainCard: {
+    flex: 1,
+    borderRadius: 24,
     overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 16,
-    elevation: 6,
-    backgroundColor: '#2a1845',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 20,
+    elevation: 10,
   },
-  placeholderCardStrip: {
-    width: STRIP_WIDTH_PERCENT,
-    minHeight: CARD_PLACEHOLDER_HEIGHT,
+  dashboardMainCardGradient: {
+    padding: 22,
+    minHeight: 168,
+    justifyContent: 'space-between',
   },
-  placeholderCardStripLight: {
-    backgroundColor: STRIP_LIGHT_COLOR,
-  },
-  placeholderCardStripSecondary: {
-    backgroundColor: colors.secondary,
-  },
-  placeholderCardGradient: {
-    flex: 1,
-    minHeight: CARD_PLACEHOLDER_HEIGHT,
-    borderRadius: 0,
+  dashboardMainCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
+  },
+  dashboardMainCardLabel: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  dashboardMainCardTopRight: { flexDirection: 'row', alignItems: 'center' },
+  balanceToggleBtn: { padding: 6 },
+  dashboardBalanceMasked: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 32,
+    fontWeight: 'bold',
+    marginTop: 8,
+    letterSpacing: 2,
+  },
+  dashboardBalance: {
+    color: colors.tertiary,
+    fontSize: 32,
+    fontWeight: 'bold',
+    marginTop: 8,
+    letterSpacing: 0.5,
+  },
+  dashboardPan: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 18,
+    letterSpacing: 2,
+  },
+  dashboardMainCardBottom: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  dashboardBrand: {
+    color: colors.tertiary,
+    fontSize: 16,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+  },
+  dashboardAddCard: {
+    width: 140,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.85)',
     borderWidth: 2,
-    borderLeftWidth: 0,
-    borderRightWidth: 0,
     borderColor: 'rgba(165,154,247,0.35)',
     borderStyle: 'dashed',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+    justifyContent: 'center',
+    padding: 16,
   },
-  placeholderPlusWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+  dashboardAddCardFull: {
+    flex: 1,
+    width: undefined,
+    minHeight: 168,
+  },
+  dashboardAddCardInner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dashboardAddCardIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(165,154,247,0.15)',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
   },
-  placeholderCardText: { color: colors.tertiary, fontSize: 17, fontWeight: 'bold', marginBottom: 4 },
-  placeholderCardSub: { color: 'rgba(255,255,255,0.75)', fontSize: 14 },
+  dashboardAddCardTitle: {
+    color: colors.fourth,
+    fontSize: 15,
+    fontWeight: '700',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  dashboardAddCardSub: {
+    color: '#6B6B6B',
+    fontSize: 12,
+    textAlign: 'center',
+  },
   paymentSection: {
     marginHorizontal: 14,
     marginTop: 16,
@@ -649,6 +846,7 @@ const styles = StyleSheet.create({
   },
   pmCardLabel: { color: colors.fourth, fontSize: 15, fontWeight: '700', marginBottom: 2 },
   pmCardSub: { color: '#6B6B6B', fontSize: 12, lineHeight: 16 },
+  pmCardChevron: { marginTop: 6 },
   pmCardAddBadge: {
     position: 'absolute',
     top: 12,
@@ -802,7 +1000,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.04)',
   },
-  kycSectionLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  kycSectionLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 },
+  kycSectionTextWrap: { flex: 1, minWidth: 0 },
+  kycSectionChevron: { marginLeft: 8 },
   kycSectionIconWrap: {
     width: 48,
     height: 48,
@@ -814,6 +1014,8 @@ const styles = StyleSheet.create({
   },
   kycSectionTitle: { color: colors.fourth, fontSize: 16, fontWeight: 'bold', marginBottom: 2 },
   kycSectionSub: { color: '#6B6B6B', fontSize: 13 },
+  kycSectionRejected: { borderColor: 'rgba(198,40,40,0.3)', backgroundColor: '#FFEBEE' },
+  kycSectionIconWrapRejected: { backgroundColor: 'rgba(198,40,40,0.12)' },
   section: { paddingHorizontal: 14, paddingTop: 20, paddingBottom: 12 },
   sectionTitle: { color: colors.fourth, fontSize: 20, fontWeight: 'bold', marginBottom: 6 },
   sectionSubtitle: { color: '#6B6B6B', fontSize: 14, lineHeight: 20 },
@@ -859,7 +1061,7 @@ const styles = StyleSheet.create({
   footerText: { color: '#5a4d96', fontSize: 13, fontWeight: '600' },
   fabContainer: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 48,
     left: 0,
     right: 0,
     alignItems: 'center',

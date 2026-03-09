@@ -51,8 +51,43 @@ export function KycFormScreen({ navigation }) {
   const [photoPieceBase64, setPhotoPieceBase64] = useState(null);
   const [photoSelfieUri, setPhotoSelfieUri] = useState(null);
   const [photoSelfieBase64, setPhotoSelfieBase64] = useState(null);
+  /** Aperçus des photos déjà envoyées (KYC rejeté) — base64 pour affichage uniquement */
+  const [photoPiecePreviewBase64, setPhotoPiecePreviewBase64] = useState(null);
+  const [photoSelfiePreviewBase64, setPhotoSelfiePreviewBase64] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingKyc, setLoadingKyc] = useState(true);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadRejectedKyc() {
+      const t = token || (await storage.getToken());
+      if (!t) {
+        if (!cancelled) setLoadingKyc(false);
+        return;
+      }
+      try {
+        const res = await api.getKyc(t);
+        if (cancelled) return;
+        if (res.success && res.data?.statut === 'rejete' && res.data?.data) {
+          const d = res.data.data;
+          if (d.nom) setNom(d.nom);
+          if (d.post_nom) setPostNom(d.post_nom);
+          if (d.prenom) setPrenom(d.prenom);
+          if (d.date_naissance) setDateNaissance(d.date_naissance);
+          if (d.adresse) setAdresse(d.adresse);
+          if (d.photo_piece_base64) setPhotoPiecePreviewBase64(d.photo_piece_base64);
+          if (d.photo_utilisateur_base64) setPhotoSelfiePreviewBase64(d.photo_utilisateur_base64);
+        }
+      } catch (_) {
+        if (!cancelled) setLoadingKyc(false);
+        return;
+      }
+      if (!cancelled) setLoadingKyc(false);
+    }
+    loadRejectedKyc();
+    return () => { cancelled = true; };
+  }, [token]);
 
   const canStep1 = nom.trim().length >= 2 && postNom.trim().length >= 2 && prenom.trim().length >= 2 && dateNaissance.trim().length >= 8;
   const canStep2 = adresse.trim().length >= 5;
@@ -76,7 +111,7 @@ export function KycFormScreen({ navigation }) {
         mediaTypes: ['images'],
         allowsEditing: true,
         aspect: [4, 3],
-        quality: 0.7,
+        quality: 0.4,
         base64: true,
         cameraType: cameraType === 'front' ? 'front' : 'back',
       });
@@ -123,7 +158,12 @@ export function KycFormScreen({ navigation }) {
         setError(res.message || 'Erreur lors de l\'envoi.');
       }
     } catch (e) {
-      setError(e.message || 'Erreur réseau.');
+      const msg = e.message || '';
+      if (msg.toLowerCase().includes('volumineux') || msg.includes('500') || msg.includes('taille')) {
+        setError("Les photos sont trop lourdes. Réduisez la qualité ou reprenez des photos plus petites.");
+      } else {
+        setError(msg || 'Erreur réseau.');
+      }
     } finally {
       setLoading(false);
     }
@@ -239,6 +279,16 @@ export function KycFormScreen({ navigation }) {
                       <Text style={styles.ctaSecondaryText}>Reprendre la photo</Text>
                     </TouchableOpacity>
                   </>
+                ) : photoPiecePreviewBase64 ? (
+                  <>
+                    <Text style={styles.photoPreviouslyLabel}>Photo précédemment envoyée</Text>
+                    <Image source={{ uri: `data:image/jpeg;base64,${photoPiecePreviewBase64}` }} style={styles.photoThumbPreview} resizeMode="cover" />
+                    <TouchableOpacity style={styles.photoBtn} onPress={() => takePhoto('back')} activeOpacity={0.85}>
+                      <FontAwesome5 name="camera" size={40} color={colors.secondary} />
+                      <Text style={styles.photoBtnText}>Prendre une nouvelle photo</Text>
+                      <Text style={styles.photoBtnSub}>Remplacer la photo rejetée</Text>
+                    </TouchableOpacity>
+                  </>
                 ) : (
                   <TouchableOpacity style={styles.photoBtn} onPress={() => takePhoto('back')} activeOpacity={0.85}>
                     <FontAwesome5 name="camera" size={40} color={colors.secondary} />
@@ -269,6 +319,16 @@ export function KycFormScreen({ navigation }) {
                     <Image source={{ uri: photoSelfieUri }} style={styles.photoPreview} resizeMode="cover" />
                     <TouchableOpacity style={styles.ctaSecondary} onPress={() => takePhoto('front')} activeOpacity={0.85}>
                       <Text style={styles.ctaSecondaryText}>Reprendre la photo</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : photoSelfiePreviewBase64 ? (
+                  <>
+                    <Text style={styles.photoPreviouslyLabel}>Photo précédemment envoyée</Text>
+                    <Image source={{ uri: `data:image/jpeg;base64,${photoSelfiePreviewBase64}` }} style={styles.photoThumbPreview} resizeMode="cover" />
+                    <TouchableOpacity style={styles.photoBtn} onPress={() => takePhoto('front')} activeOpacity={0.85}>
+                      <FontAwesome5 name="user-circle" size={40} color={colors.secondary} />
+                      <Text style={styles.photoBtnText}>Prendre une nouvelle photo</Text>
+                      <Text style={styles.photoBtnSub}>Remplacer la photo rejetée</Text>
                     </TouchableOpacity>
                   </>
                 ) : (
@@ -393,6 +453,8 @@ const styles = StyleSheet.create({
   },
   photoBtnText: { color: colors.primary, fontSize: 16, fontWeight: 'bold', marginTop: 12 },
   photoBtnSub: { color: '#6B6B6B', fontSize: 13, marginTop: 4 },
+  photoPreviouslyLabel: { color: '#6B6B6B', fontSize: 12, marginBottom: 8 },
+  photoThumbPreview: { width: '100%', maxHeight: 120, height: 120, borderRadius: 12, marginBottom: 12, backgroundColor: '#eee' },
   photoPreview: { width: '100%', height: 220, borderRadius: 16, marginBottom: 16, backgroundColor: '#eee' },
   recapRow: { marginBottom: 12 },
   recapLabel: { color: '#6B6B6B', fontSize: 12, marginBottom: 2 },

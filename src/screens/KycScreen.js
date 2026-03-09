@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
   StatusBar,
   Linking,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { FontAwesome5 } from '@expo/vector-icons';
@@ -98,6 +99,18 @@ export function KycScreen({ navigation }) {
               <Text style={styles.cardTitle}>KYC en attente</Text>
               <Text style={styles.cardSub}>Votre dossier est en cours de validation par l’équipe RIPA.</Text>
             </View>
+          ) : kyc.statut === 'rejete' ? (
+            <View style={styles.card}>
+              <View style={[styles.iconWrap, styles.iconWrapRejected]}>
+                <FontAwesome5 name="times-circle" size={40} color="#c62828" />
+              </View>
+              <Text style={styles.cardTitle}>KYC rejeté</Text>
+              <Text style={styles.cardSub}>Votre dossier a été rejeté. Vous pouvez soumettre un nouveau dossier.</Text>
+              <TouchableOpacity style={styles.cta} onPress={() => navigation.navigate('KycForm')} activeOpacity={0.85}>
+                <Text style={styles.ctaText}>Refaire le KYC et resoumettre</Text>
+                <FontAwesome5 name="arrow-right" size={18} color={colors.tertiary} style={styles.ctaIcon} />
+              </TouchableOpacity>
+            </View>
           ) : kyc.statut === 'valide' && kyc.data ? (
             <View style={styles.card}>
               <View style={styles.badgeValid}>
@@ -107,6 +120,22 @@ export function KycScreen({ navigation }) {
               <View style={styles.dataRow}><Text style={styles.dataLabel}>Nom</Text><Text style={styles.dataValue}>{kyc.data.nom} {kyc.data.post_nom} {kyc.data.prenom}</Text></View>
               <View style={styles.dataRow}><Text style={styles.dataLabel}>Date de naissance</Text><Text style={styles.dataValue}>{kyc.data.date_naissance}</Text></View>
               <View style={styles.dataRow}><Text style={styles.dataLabel}>Adresse</Text><Text style={styles.dataValue}>{kyc.data.adresse}</Text></View>
+              {(kyc.data.photo_piece_base64 || kyc.data.photo_utilisateur_base64) ? (
+                <View style={styles.kycPhotosRow}>
+                  {kyc.data.photo_piece_base64 ? (
+                    <View style={styles.kycPhotoBlock}>
+                      <Text style={styles.kycPhotoLabel}>Pièce d'identité</Text>
+                      <Image source={{ uri: `data:image/jpeg;base64,${kyc.data.photo_piece_base64}` }} style={styles.kycPhotoImg} resizeMode="cover" />
+                    </View>
+                  ) : null}
+                  {kyc.data.photo_utilisateur_base64 ? (
+                    <View style={styles.kycPhotoBlock}>
+                      <Text style={styles.kycPhotoLabel}>Photo passeport / selfie</Text>
+                      <Image source={{ uri: `data:image/jpeg;base64,${kyc.data.photo_utilisateur_base64}` }} style={styles.kycPhotoImg} resizeMode="cover" />
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
               {kyc.date_prochaine_kyc ? (
                 <Text style={styles.nextKyc}>Prochaine révision KYC : {kyc.date_prochaine_kyc}</Text>
               ) : null}
@@ -160,4 +189,9 @@ const styles = StyleSheet.create({
   nextKyc: { color: '#6B6B6B', fontSize: 13, marginTop: 16 },
   whatsappBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#25D366', paddingVertical: 14, borderRadius: 14, marginTop: 20 },
   hint: { color: '#6B6B6B', fontSize: 13, marginTop: 16 },
+  iconWrapRejected: { backgroundColor: 'rgba(198,40,40,0.12)' },
+  kycPhotosRow: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 16, gap: 16 },
+  kycPhotoBlock: { width: '100%', marginBottom: 8 },
+  kycPhotoLabel: { color: '#6B6B6B', fontSize: 13, marginBottom: 6, fontWeight: '600' },
+  kycPhotoImg: { width: '100%', height: 200, borderRadius: 12, backgroundColor: '#F0F0F0' },
 });
